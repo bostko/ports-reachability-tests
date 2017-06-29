@@ -1,0 +1,66 @@
+brooklyn.catalog:
+  items:
+  - https://raw.githubusercontent.com/brooklyncentral/common-catalog-utils/master/common-tests/src/main/resources/commontests/common.tests.bom
+  - id: org.apache.brooklyn.ports.server-client-apps
+    services:
+    - type: org.apache.brooklyn.entity.software.base.EmptySoftwareProcess
+      id: entity.ports.server
+      provisioning.properties:
+        stopIpTables: true
+    - type: org.apache.brooklyn.entity.software.base.EmptySoftwareProcess
+      id: entity.ports.client
+      provisioning.properties:
+        stopIpTables: true
+
+  - id: org.apache.brooklyn.entity.opened.security.groups
+    services:
+    - type: org.apache.brooklyn.entity.software.base.EmptySoftwareProcess
+      provisioning.properties:
+        customizers:
+        - $brooklyn:object:
+            type: org.apache.brooklyn.location.jclouds.networking.SharedLocationSecurityGroupCustomizer
+            object.fields: {locationName: "test", tcpPortRanges: ["8080"], cidr: "0.0.0.0/32"}
+
+  - id: org.apache.brooklyn.tcp.tests
+    itemType: template
+    item:
+      services:
+      - type: test-case
+        name: tcp tests
+        targetId: entity.secgroup.tcp.ports
+        brooklyn.children:
+        - type: test-ssh
+          targetId: entity.ports.server
+          name: 1. laucnh a server
+          brooklyn.config:
+            command: $brooklyn:formatString("nc -l %d", $brooklyn:sensor("tcp.sample.listening.port"))
+            assertOut: Hi TCP
+        - type: test-ssh
+          name: 2. client send a message
+          targetId: entity.ports.client
+          brooklyn.config:
+            command: $brooklyn:formatString("echo 'Hi TCP' | nc %s %d", $brooklyn:entity("entity.ports.server").attributeWhenReady("host.name"), $brooklyn:sensor("tcp.sample.listening.port"))
+            assertStatus:
+              equals: 0
+
+  - id: org.apache.brooklyn.udp.tests
+    itemType: template
+    item:
+      services:
+      - type: test-case
+        name: udp tests
+        targetId: entity.secgroup.udp.ports
+        brooklyn.children:
+        - type: test-ssh
+          targetId: entity.ports.server
+          name: 1. laucnh a server
+          brooklyn.config:
+            command: $brooklyn:formatString("nc -u -i 5 -l %d", $brooklyn:sensor("tcp.sample.listening.port"))
+        - type: test-ssh
+          name: launch a
+          targetId: entity.ports.client
+          brooklyn.config:
+            command: echo Hi | nc -u localhost 8080
+            assertStatus:
+              equals: 0
+
