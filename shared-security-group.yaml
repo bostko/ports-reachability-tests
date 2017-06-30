@@ -1,66 +1,125 @@
 brooklyn.catalog:
   items:
   - https://raw.githubusercontent.com/brooklyncentral/common-catalog-utils/master/common-tests/src/main/resources/commontests/common.tests.bom
-  - id: org.apache.brooklyn.ports.server-client-apps
-    services:
-    - type: org.apache.brooklyn.entity.software.base.EmptySoftwareProcess
-      id: entity.ports.server
-      provisioning.properties:
-        stopIpTables: true
-    - type: org.apache.brooklyn.entity.software.base.EmptySoftwareProcess
+  - id: org.apache.brooklyn.ports.client
+    item:
+      type: org.apache.brooklyn.entity.software.base.VanillaSoftwareProcess
       id: entity.ports.client
+      name: Client
+      brooklyn.config:
+        install.command: sudo yum install -y nmap-ncat
+        launch.command: echo launch
+        checkRunning.command: echo running
+  - id: org.apache.brooklyn.entity.server.tcp.security.groups
+    item:
+      type: org.apache.brooklyn.entity.software.base.VanillaSoftwareProcess
+      id: entity.ports.tcp.server
+      name: Opened TCP Security Group Inbound ports
+      brooklyn.config:
+        install.command: sudo yum install -y nmap-ncat
+        launch.command: echo launch
+        checkRunning.command: echo running
       provisioning.properties:
-        stopIpTables: true
-
-  - id: org.apache.brooklyn.entity.opened.security.groups
-    services:
-    - type: org.apache.brooklyn.entity.software.base.EmptySoftwareProcess
-      provisioning.properties:
+        stopIptables: true
         customizers:
         - $brooklyn:object:
             type: org.apache.brooklyn.location.jclouds.networking.SharedLocationSecurityGroupCustomizer
-            object.fields: {locationName: "test", tcpPortRanges: ["8080"], cidr: "0.0.0.0/32"}
+            object.fields: {locationName: "test-tcp-server", tcpPortRanges: ["22", "1234"], cidr: "0.0.0.0/0"}
+  - id: org.apache.brooklyn.entity.server.udp.security.groups
+    item:
+      type: org.apache.brooklyn.entity.software.base.VanillaSoftwareProcess
+      id: entity.ports.udp.server
+      name: Opened UDP Security Group Inbound ports
+      brooklyn.config:
+        install.command: sudo yum install -y nmap-ncat
+        launch.command: echo launch
+        checkRunning.command: echo running
+      provisioning.properties:
+        stopIptables: true
+        customizers:
+        - $brooklyn:object:
+            type: org.apache.brooklyn.location.jclouds.networking.SharedLocationSecurityGroupCustomizer
+            object.fields: {locationName: "test-udp-server", tcpPortRanges: ["22"], udpPortRanges: ["1234"], cidr: "0.0.0.0/0"}
 
   - id: org.apache.brooklyn.tcp.tests
+    name: Test opening a Security group and client talking to a TCP port
     itemType: template
     item:
       services:
+      - type: org.apache.brooklyn.ports.client
+      - type: org.apache.brooklyn.entity.server.tcp.security.groups
       - type: test-case
-        name: tcp tests
-        targetId: entity.secgroup.tcp.ports
         brooklyn.children:
-        - type: test-ssh
-          targetId: entity.ports.server
-          name: 1. laucnh a server
-          brooklyn.config:
-            command: $brooklyn:formatString("nc -l %d", $brooklyn:sensor("tcp.sample.listening.port"))
-            assertOut: Hi TCP
-        - type: test-ssh
-          name: 2. client send a message
-          targetId: entity.ports.client
-          brooklyn.config:
-            command: $brooklyn:formatString("echo 'Hi TCP' | nc %s %d", $brooklyn:entity("entity.ports.server").attributeWhenReady("host.name"), $brooklyn:sensor("tcp.sample.listening.port"))
-            assertStatus:
-              equals: 0
+        - type: test-case
+          brooklyn.children:
+          - type: assert-up-and-running-initial
+            targetId: entity.ports.tcp.server
+            name: 1. Server is UP
+          - type: assert-up-and-running-initial
+            targetId: entity.ports.client
+            name: 1. Client is UP
+          - type: org.apache.brooklyn.test.framework.ParallelTestCase
+            name: 3. Inspecting whether client can talk to the server
+            brooklyn.children:
+            - type: test-ssh
+              targetId: entity.ports.tcp.server
+              id: server-test
+              name: 1. laucnh a server
+              brooklyn.config:
+                command: nc -l 1234
+                maxAttempts: 1
+                assert.out:
+                  contains: Hi TCP
+                assert.status:
+                  equals: 0
+            - type: test-ssh
+              name: 2. client send a message
+              targetId: entity.ports.client
+              brooklyn.config:
+                command: >
+                  $brooklyn:formatString("echo 'Waiting server to start %s' && echo 'Hi TCP' | nc %s 1234",
+                    $brooklyn:entity("server-test").attributeWhenReady("testCommandsQueued"), $brooklyn:entity("entity.ports.tcp.server").attributeWhenReady("host.name"))
+                assert.status:
+                  equals: 0
 
   - id: org.apache.brooklyn.udp.tests
+    name: Test opening a Security group and client talking to an UDP port
     itemType: template
     item:
       services:
+      - type: org.apache.brooklyn.ports.client
+      - type: org.apache.brooklyn.entity.server.udp.security.groups
       - type: test-case
-        name: udp tests
-        targetId: entity.secgroup.udp.ports
         brooklyn.children:
-        - type: test-ssh
-          targetId: entity.ports.server
-          name: 1. laucnh a server
-          brooklyn.config:
-            command: $brooklyn:formatString("nc -u -i 5 -l %d", $brooklyn:sensor("tcp.sample.listening.port"))
-        - type: test-ssh
-          name: launch a
-          targetId: entity.ports.client
-          brooklyn.config:
-            command: echo Hi | nc -u localhost 8080
-            assertStatus:
-              equals: 0
-
+        - type: test-case
+          brooklyn.children:
+          - type: assert-up-and-running-initial
+            targetId: entity.ports.udp.server
+            name: 1. Server is UP
+          - type: assert-up-and-running-initial
+            targetId: entity.ports.client
+            name: 1. Client is UP
+          - type: org.apache.brooklyn.test.framework.ParallelTestCase
+            name: 3. Inspecting whether client can talk to the server
+            brooklyn.children:
+            - type: test-ssh
+              targetId: entity.ports.udp.server
+              id: server-test
+              name: 1. laucnh a server
+              brooklyn.config:
+                command: nc -w 3 -i 3 -u -l 1234
+                maxAttempts: 1
+                assert.out:
+                  contains: Hi UDP
+                assert.status:
+                  equals: 2
+            - type: test-ssh
+              name: 2. client send a message
+              targetId: entity.ports.client
+              brooklyn.config:
+                maxAttempts: 1
+                command: >
+                  $brooklyn:formatString("echo 'Waiting server to start %s' && echo 'Hi UDP' | nc -u %s 1234",
+                    $brooklyn:entity("server-test").attributeWhenReady("testCommandsQueued"), $brooklyn:entity("entity.ports.udp.server").attributeWhenReady("host.name"))
+                assert.status:
+                  equals: 0
