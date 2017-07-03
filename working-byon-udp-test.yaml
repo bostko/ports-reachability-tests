@@ -1,0 +1,54 @@
+name: byon localhost test
+services:
+- type: org.apache.brooklyn.ports.client
+  brooklyn.config:
+    install.command: echo install
+  location:
+    byon:
+      hosts:
+      - ssh: localhost
+        user: val
+        privateKeyFile: ~/.ssh/id_rsa
+- type: org.apache.brooklyn.entity.server.udp.security.groups
+  brooklyn.config:
+    install.command: echo install
+  location:
+    byon:
+      hosts:
+      - ssh: localhost
+        user: val
+        privateKeyFile: ~/.ssh/id_rsa
+- type: test-case
+  brooklyn.children:
+  - type: test-case
+    brooklyn.children:
+    - type: assert-up-and-running-initial
+      targetId: entity.ports.udp.server
+      name: 1. Server is UP
+    - type: assert-up-and-running-initial
+      targetId: entity.ports.client
+      name: 1. Client is UP
+    - type: org.apache.brooklyn.test.framework.ParallelTestCase
+      name: 3. Inspecting whether client can talk to the server
+      brooklyn.children:
+      - type: test-ssh
+        targetId: entity.ports.udp.server
+        id: server-test
+        name: 1. laucnh a server
+        brooklyn.config:
+          command: nc -w 3 -i 3 -u -l 1234
+          maxAttempts: 1
+          assert.out:
+            contains: Hi UDP
+          assert.status:
+            equals: 2
+      - type: test-ssh
+        name: 2. client send a message
+        targetId: entity.ports.client
+        brooklyn.config:
+          maxAttempts: 1
+          command: >
+            $brooklyn:formatString("echo 'Waiting server to start %s' && echo 'Hi UDP' | nc -u %s 1234",
+              $brooklyn:entity("server-test").attributeWhenReady("testCommandsQueued"), $brooklyn:entity("entity.ports.udp.server").attributeWhenReady("host.name"))
+          assert.status:
+            equals: 0
